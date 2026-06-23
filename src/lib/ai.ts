@@ -1,32 +1,13 @@
-import { GoogleGenAI } from '@google/genai';
 import { ScriptAnalysis, RecoveryInfo } from '@/types';
 import { GEMINI_PROMPTS, MAX_SCRIPT_LENGTH } from './constants';
 import { generateId as utilsGenerateId } from './utils';
 
 // =============================================================================
-// SyncSpeak — Gemini AI Integration
-// =============================================================================
-//
-// Wraps the Google GenAI client with:
-//   - Retry logic (1 retry with exponential back-off for 429 / 503)
-//   - Request timeouts (15 s analysis, 8 s recovery)
-//   - Human-readable error mapping
+// SyncSpeak — OpenRouter AI Integration
 // =============================================================================
 
-// ---------------------------------------------------------------------------
-// Client initialisation
-// ---------------------------------------------------------------------------
-
-let aiInstance: GoogleGenAI | null = null;
-
-function getAI(): GoogleGenAI | null {
-  if (!aiInstance) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (apiKey) {
-      aiInstance = new GoogleGenAI({ apiKey });
-    }
-  }
-  return aiInstance;
+function getApiKey(): string | undefined {
+  return process.env.OPENROUTER_API_KEY;
 }
 
 // ---------------------------------------------------------------------------
@@ -46,7 +27,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
-/** Check if an error is retryable (rate-limit or transient server error). */
 function isRetryable(error: any): boolean {
   const msg = (error?.message ?? '').toLowerCase();
   const status = error?.status ?? error?.httpStatusCode ?? 0;
@@ -54,39 +34,34 @@ function isRetryable(error: any): boolean {
   return (
     status === 429 ||
     status === 503 ||
+    status === 524 ||
     msg.includes('429') ||
     msg.includes('rate') ||
     msg.includes('quota') ||
-    msg.includes('resource exhausted') ||
     msg.includes('503') ||
-    msg.includes('unavailable')
+    msg.includes('timeout')
   );
 }
 
-/** Map raw Gemini errors to user-friendly messages. */
 function friendlyError(error: any): string {
   const msg = (error?.message ?? '').toLowerCase();
 
-  if (msg.includes('429') || msg.includes('rate') || msg.includes('quota') || msg.includes('resource exhausted')) {
-    return 'The AI is receiving too many requests right now. Please wait a moment and try again.';
+  if (msg.includes('429') || msg.includes('rate') || msg.includes('quota') || msg.includes('balance')) {
+    return 'The AI service is receiving too many requests or ran out of credits. Please try again in a moment.';
   }
   if (msg.includes('503') || msg.includes('unavailable')) {
     return 'The AI service is temporarily unavailable. Please try again in a few seconds.';
   }
   if (msg.includes('api key') || msg.includes('401') || msg.includes('403')) {
-    return 'Invalid or missing API key. Please check your GEMINI_API_KEY configuration.';
+    return 'Invalid or missing API key. Please check your OPENROUTER_API_KEY configuration.';
   }
   if (msg.includes('timeout') || msg.includes('timed out')) {
-    return error.message; // already friendly from withTimeout
+    return error.message; 
   }
 
   return error.message || 'An unexpected error occurred while communicating with the AI.';
 }
 
-/**
- * Execute `fn` with a single retry on retryable errors.
- * The retry waits 1.5 s before the second attempt.
- */
 async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
@@ -94,10 +69,48 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
     if (isRetryable(error)) {
       console.warn('[SyncSpeak] Retryable error — waiting 1.5 s before retry:', error.message);
       await new Promise((r) => setTimeout(r, 1500));
-      return fn(); // single retry — don't catch this one
+      return fn(); 
     }
     throw error;
   }
+}
+
+async function openRouterCompletion(systemInstruction: string, prompt: string, isJson: boolean): Promise<string> {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    throw new Error('OPENROUTER_API_KEY environment variable is not set.');
+  }
+
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'HTTP-Referer': 'http://localhost:3000', 
+      'X-Title': 'SyncSpeak',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'google/gemini-2.5-flash',
+      messages: [
+        { role: 'system', content: systemInstruction },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.2,
+      max_tokens: 8192,
+      response_format: isJson ? { type: 'json_object' } : undefined
+    })
+  });
+
+  if (!response.ok) {
+    let errBody = '';
+    try {
+      errBody = await response.text();
+    } catch (e) {}
+    throw new Error(`OpenRouter API error ${response.status}: ${errBody}`);
+  }
+
+  const data = await response.json();
+  return data.choices[0].message.content;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,12 +118,10 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
 // ---------------------------------------------------------------------------
 
 export async function analyzeScript(scriptText: string, title: string): Promise<ScriptAnalysis> {
-  const ai = getAI();
-  if (!ai) {
-    throw new Error('GEMINI_API_KEY environment variable is not set.');
+  if (!getApiKey()) {
+    throw new Error('OPENROUTER_API_KEY environment variable is not set.');
   }
 
-  // Input validation
   if (!scriptText || scriptText.trim().length === 0) {
     throw new Error('Script text cannot be empty.');
   }
@@ -121,30 +132,22 @@ export async function analyzeScript(scriptText: string, title: string): Promise<
   try {
     const prompt = GEMINI_PROMPTS.analysisPrompt.replace('{{SCRIPT_TEXT}}', scriptText);
 
-    const response = await withRetry(() =>
+    const text = await withRetry(() =>
       withTimeout(
-        ai!.models.generateContent({
-          model: 'gemini-3.1-flash-lite',
-          contents: prompt,
-          config: {
-            systemInstruction: GEMINI_PROMPTS.systemPrompt,
-            temperature: 0.2,
-            responseMimeType: 'application/json',
-          },
-        }),
+        openRouterCompletion(GEMINI_PROMPTS.systemPrompt, prompt, true),
         15_000,
         'Script analysis',
       ),
     );
 
-    const text = response.text;
     if (!text) {
       throw new Error('Empty response from AI');
     }
 
-    const result = JSON.parse(text);
+    // Sometimes OpenRouter wraps json in markdown code blocks even with response_format
+    const cleanText = text.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+    const result = JSON.parse(cleanText);
 
-    // Assign IDs to chunks
     const chunksWithIds = result.chunks.map((chunk: any) => ({
       ...chunk,
       id: utilsGenerateId(),
@@ -174,9 +177,8 @@ export async function getRecoverySuggestion(
   surroundingContext: string,
   spokenText: string,
 ): Promise<RecoveryInfo> {
-  const ai = getAI();
-  if (!ai) {
-    throw new Error('GEMINI_API_KEY environment variable is not set.');
+  if (!getApiKey()) {
+    throw new Error('OPENROUTER_API_KEY environment variable is not set.');
   }
 
   try {
@@ -185,23 +187,14 @@ export async function getRecoverySuggestion(
       .replace('{{SURROUNDING_CONTEXT}}', surroundingContext)
       .replace('{{SPOKEN_TEXT}}', spokenText);
 
-    const response = await withRetry(() =>
+    const text = await withRetry(() =>
       withTimeout(
-        ai!.models.generateContent({
-          model: 'gemini-3.1-flash-lite',
-          contents: prompt,
-          config: {
-            systemInstruction: GEMINI_PROMPTS.systemPrompt,
-            temperature: 0.4,
-            responseMimeType: 'application/json',
-          },
-        }),
+        openRouterCompletion(GEMINI_PROMPTS.systemPrompt, prompt, true),
         8_000,
         'Recovery suggestion',
       ),
     );
 
-    const text = response.text;
     if (!text) {
       return {
         currentTopic: 'Unknown',
@@ -211,7 +204,8 @@ export async function getRecoverySuggestion(
       };
     }
 
-    return JSON.parse(text);
+    const cleanText = text.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+    return JSON.parse(cleanText);
   } catch (error) {
     console.error('Error getting recovery info:', error);
     return {

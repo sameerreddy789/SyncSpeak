@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { analyzeScript } from '@/lib/gemini';
+import { analyzeScript } from '@/lib/ai';
 
 export async function POST(req: Request) {
   try {

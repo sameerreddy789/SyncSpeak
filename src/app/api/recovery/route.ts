@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getRecoverySuggestion } from '@/lib/gemini';
+import { getRecoverySuggestion } from '@/lib/ai';
 
 export async function POST(req: Request) {
   try {

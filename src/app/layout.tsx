@@ -9,6 +9,8 @@ export const metadata: Metadata = {
   description: 'An AI-powered teleprompter that tracks your speech and automatically scrolls as you present.',
 };
 
+import { AuthProvider } from '@/lib/AuthContext';
+
 export default function RootLayout({
   children,
 }: {
@@ -17,7 +19,9 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body className={`${inter.className} min-h-screen flex flex-col antialiased bg-[var(--bg-primary)]`}>
-        {children}
+        <AuthProvider>
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );

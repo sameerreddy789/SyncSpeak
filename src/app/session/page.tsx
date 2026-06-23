@@ -43,6 +43,7 @@ import type {
 } from '@/types';
 import { cn, formatDuration, generateId } from '@/lib/utils';
 import { DEFAULT_TELEPROMPTER_SETTINGS } from '@/lib/constants';
+import { useTeleprompter } from '@/hooks/useTeleprompter';
 
 // =============================================================================
 // DEMO DATA — Immediately usable sample so the page works without an API call
@@ -255,31 +256,40 @@ export default function SessionPage() {
   const router = useRouter();
 
   // ---------------------------------------------------------------------------
-  // State — Analysis & Session
+  // State — Analysis
   // ---------------------------------------------------------------------------
-  const [analysis, setAnalysis] = useState<ScriptAnalysis | null>(null);
-  const [session, setSession] = useState<PresentationSession>({
-    id: generateId(),
-    analysisId: '',
-    status: 'idle',
-    currentChunkIndex: 0,
-    startedAt: null,
-    completedAt: null,
-    progress: 0,
-    spokenText: '',
-  });
+  const [analysis, setAnalysis] = useState<ScriptAnalysis>(DEMO_ANALYSIS);
+  const [hasLoaded, setHasLoaded] = useState(false);
 
   // ---------------------------------------------------------------------------
-  // State — Teleprompter Settings & UI
+  // State — Teleprompter Settings
   // ---------------------------------------------------------------------------
   const [settings, setSettings] = useState<TeleprompterSettings>(DEFAULT_TELEPROMPTER_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
   const [showTranscript, setShowTranscript] = useState(false);
   const [elapsed, setElapsed] = useState(0);
-  const [isMicActive, setIsMicActive] = useState(false);
-  const [transcript, setTranscript] = useState('');
-  const [matchConfidence, setMatchConfidence] = useState(0.85);
-  const [recoveryInfo, setRecoveryInfo] = useState<RecoveryInfo | null>(null);
+
+  // ---------------------------------------------------------------------------
+  // The Teleprompter Brain
+  // ---------------------------------------------------------------------------
+  const teleprompter = useTeleprompter({ analysis, settings });
+  const {
+    session,
+    isListening: isMicActive,
+    currentChunkIndex,
+    progress,
+    isRecoveryMode,
+    recoveryInfo,
+    startSession: hookStartSession,
+    pauseSession: togglePause,
+    resumeSession,
+    endSession,
+    goToChunk: jumpToChunk,
+    transcript,
+    interimTranscript,
+    error: speechError,
+    isSpeechSupported,
+  } = teleprompter;
 
   // ---------------------------------------------------------------------------
   // Refs
@@ -290,28 +300,21 @@ export default function SessionPage() {
   // ---------------------------------------------------------------------------
   // Derived values
   // ---------------------------------------------------------------------------
-  const chunks = useMemo(() => analysis?.chunks ?? [], [analysis]);
-  const currentChunkIndex = session.currentChunkIndex;
+  const chunks = useMemo(() => analysis.chunks ?? [], [analysis]);
   const isActive = session.status === 'active';
   const isPaused = session.status === 'paused';
   const isCompleted = session.status === 'completed';
   const isIdle = session.status === 'idle';
 
-  const progress = useMemo(() => {
-    if (chunks.length === 0) return 0;
-    return Math.round(((currentChunkIndex + 1) / chunks.length) * 100);
-  }, [currentChunkIndex, chunks.length]);
-
   const notesForChunk = useCallback(
     (chunkId: string): CoachingNote[] =>
-      analysis?.coachingNotes.filter((n) => n.chunkId === chunkId) ?? [],
+      analysis.coachingNotes.filter((n) => n.chunkId === chunkId) ?? [],
     [analysis],
   );
 
   // Which topic are we in?
   const currentTopic = useMemo(() => {
     if (!analysis || chunks.length === 0) return null;
-    const currentId = chunks[currentChunkIndex]?.id;
     return (
       analysis.topicHierarchy.find((t) => {
         const startIdx = chunks.findIndex((c) => c.id === t.startChunkId);
@@ -322,22 +325,20 @@ export default function SessionPage() {
   }, [analysis, chunks, currentChunkIndex]);
 
   // ---------------------------------------------------------------------------
-  // Load analysis from sessionStorage or use demo
+  // Load analysis from sessionStorage
   // ---------------------------------------------------------------------------
   useEffect(() => {
     try {
-      const stored = sessionStorage.getItem('syncspeak_analysis');
+      // Fixed: The dashboard sets 'syncspeak_session_analysis', not 'syncspeak_analysis'
+      const stored = sessionStorage.getItem('syncspeak_session_analysis');
       if (stored) {
         const parsed = JSON.parse(stored) as ScriptAnalysis;
         setAnalysis(parsed);
-        return;
       }
     } catch {
       // Parsing failed — fall through to demo
     }
-
-    // Default to demo data so the page is immediately usable
-    setAnalysis(DEMO_ANALYSIS);
+    setHasLoaded(true);
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -345,21 +346,27 @@ export default function SessionPage() {
   // ---------------------------------------------------------------------------
   useEffect(() => {
     let interval: NodeJS.Timeout;
-    if (session.status === 'active') {
+    if (isActive) {
       interval = setInterval(() => setElapsed((e) => e + 1), 1000);
     }
     return () => clearInterval(interval);
-  }, [session.status]);
+  }, [isActive]);
 
   // ---------------------------------------------------------------------------
   // Auto-scroll to current chunk
   // ---------------------------------------------------------------------------
   useEffect(() => {
     if (!isActive && !isPaused) return;
-    chunkRefs.current[currentChunkIndex]?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'center',
-    });
+    
+    // Throttle scrolling slightly to prevent visual jitter when speaking quickly
+    const timer = setTimeout(() => {
+      chunkRefs.current[currentChunkIndex]?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    }, 150);
+    
+    return () => clearTimeout(timer);
   }, [currentChunkIndex, isActive, isPaused]);
 
   // ---------------------------------------------------------------------------
@@ -372,97 +379,70 @@ export default function SessionPage() {
 
       if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
         e.preventDefault();
-        goToNextChunk();
+        const next = Math.min(currentChunkIndex + 1, chunks.length - 1);
+        if (next === chunks.length - 1 && currentChunkIndex === chunks.length - 1) {
+          endSession();
+        } else {
+          jumpToChunk(next);
+        }
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
         e.preventDefault();
-        goToPrevChunk();
+        jumpToChunk(Math.max(currentChunkIndex - 1, 0));
       } else if (e.key === ' ') {
         e.preventDefault();
-        togglePause();
+        if (isPaused) {
+          resumeSession();
+        } else {
+          togglePause();
+        }
       }
     }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive, isPaused, currentChunkIndex, chunks.length, showSettings]);
+  }, [isActive, isPaused, currentChunkIndex, chunks.length, showSettings, jumpToChunk, togglePause, resumeSession, endSession]);
 
   // ---------------------------------------------------------------------------
   // Session actions
   // ---------------------------------------------------------------------------
   const startSession = useCallback(() => {
-    setSession((s) => ({
-      ...s,
-      status: 'active',
-      startedAt: new Date(),
-      currentChunkIndex: 0,
-      progress: 0,
-    }));
     setElapsed(0);
-    setIsMicActive(true);
-    setTranscript('');
-    setRecoveryInfo(null);
-  }, []);
-
-  const togglePause = useCallback(() => {
-    setSession((s) => ({
-      ...s,
-      status: s.status === 'active' ? 'paused' : 'active',
-    }));
-  }, []);
-
-  const endSession = useCallback(() => {
-    setSession((s) => ({
-      ...s,
-      status: 'completed',
-      completedAt: new Date(),
-      progress: 100,
-    }));
-    setIsMicActive(false);
-  }, []);
+    hookStartSession();
+  }, [hookStartSession]);
 
   const restartSession = useCallback(() => {
-    setSession({
-      id: generateId(),
-      analysisId: analysis?.id ?? '',
-      status: 'idle',
-      currentChunkIndex: 0,
-      startedAt: null,
-      completedAt: null,
-      progress: 0,
-      spokenText: '',
-    });
     setElapsed(0);
-    setTranscript('');
-    setRecoveryInfo(null);
-    setIsMicActive(false);
-  }, [analysis]);
-
-  const goToNextChunk = useCallback(() => {
-    setSession((s) => {
-      const next = Math.min(s.currentChunkIndex + 1, chunks.length - 1);
-      if (next === chunks.length - 1 && s.currentChunkIndex === chunks.length - 1) {
-        // Already at last chunk — end session
-        return { ...s, status: 'completed', completedAt: new Date(), progress: 100 };
-      }
-      return { ...s, currentChunkIndex: next };
-    });
-  }, [chunks.length]);
+    teleprompter.endSession();
+    // A small delay to let the hook reset fully before starting again
+    setTimeout(() => {
+      hookStartSession();
+    }, 100);
+  }, [teleprompter, hookStartSession]);
 
   const goToPrevChunk = useCallback(() => {
-    setSession((s) => ({
-      ...s,
-      currentChunkIndex: Math.max(s.currentChunkIndex - 1, 0),
-    }));
-  }, []);
+    jumpToChunk(Math.max(currentChunkIndex - 1, 0));
+  }, [currentChunkIndex, jumpToChunk]);
 
-  const jumpToChunk = useCallback((index: number) => {
-    setSession((s) => ({ ...s, currentChunkIndex: index }));
-  }, []);
+  const goToNextChunk = useCallback(() => {
+    const next = Math.min(currentChunkIndex + 1, chunks.length - 1);
+    if (next === chunks.length - 1 && currentChunkIndex === chunks.length - 1) {
+      endSession();
+    } else {
+      jumpToChunk(next);
+    }
+  }, [currentChunkIndex, chunks.length, endSession, jumpToChunk]);
 
   const toggleMic = useCallback(() => {
-    setIsMicActive((m) => !m);
-  }, []);
+    if (isMicActive) {
+      togglePause();
+    } else {
+      if (isPaused) {
+        resumeSession();
+      } else {
+        hookStartSession();
+      }
+    }
+  }, [isMicActive, isPaused, togglePause, resumeSession, hookStartSession]);
 
   // ---------------------------------------------------------------------------
   // Settings updaters
@@ -475,10 +455,53 @@ export default function SessionPage() {
   }, []);
 
   // ═══════════════════════════════════════════════════════════════════════════
+  //  RENDER: State 0 — Unsupported Browser
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  if (hasLoaded && !isSpeechSupported) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-surface-0 px-4">
+        <motion.div
+          initial={{ opacity: 0, y: 24 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="flex flex-col items-center gap-6 text-center"
+        >
+          <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-red-500/30 bg-red-500/10 backdrop-blur-lg">
+            <AlertCircle className="h-10 w-10 text-red-400" />
+          </div>
+
+          <h1 className="text-2xl font-semibold text-foreground">
+            Browser Not Supported
+          </h1>
+          <p className="max-w-md text-foreground-muted">
+            SyncSpeak relies on the Web Speech API for real-time speech tracking. 
+            Currently, this is only supported in Google Chrome, Microsoft Edge, and Safari. 
+            Please open this application in a supported browser.
+          </p>
+
+          <button
+            onClick={() => router.push('/')}
+            className={cn(
+              'mt-2 rounded-xl px-8 py-3 text-sm font-medium',
+              'bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20',
+              'transition-all duration-300',
+              'hover:bg-accent-cyan/20 hover:border-accent-cyan/40 hover:shadow-[var(--glow-cyan)]',
+              'active:scale-[0.97]',
+            )}
+          >
+            Go to Dashboard
+          </button>
+        </motion.div>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   //  RENDER: State 1 — No Analysis Loaded
   // ═══════════════════════════════════════════════════════════════════════════
 
-  if (!analysis) {
+  if (hasLoaded && !analysis) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-surface-0 px-4">
         <motion.div
@@ -571,11 +594,10 @@ export default function SessionPage() {
           </p>
 
           {/* Stats grid */}
-          <div className="mt-2 grid grid-cols-3 gap-4">
+          <div className="mt-2 grid grid-cols-2 gap-4">
             {[
               { label: 'Duration', value: formatDuration(elapsed) },
               { label: 'Chunks Covered', value: `${chunks.length}/${chunks.length}` },
-              { label: 'Avg Confidence', value: `${Math.round(matchConfidence * 100)}%` },
             ].map((stat, i) => (
               <motion.div
                 key={stat.label}
@@ -1142,7 +1164,14 @@ export default function SessionPage() {
                   <Volume2 className="mt-0.5 h-4 w-4 shrink-0 text-foreground-muted/50" />
                   <div className="flex-1">
                     <p className="min-h-[2rem] text-sm leading-relaxed text-foreground/60">
-                      {transcript || (
+                      {transcript ? (
+                        <>
+                          {transcript}{' '}
+                          <span className="italic text-foreground-muted">{interimTranscript}</span>
+                        </>
+                      ) : interimTranscript ? (
+                        <span className="italic text-foreground-muted">{interimTranscript}</span>
+                      ) : (
                         <span className="italic text-foreground-muted/40">
                           {isMicActive
                             ? 'Listening... start speaking to see your transcript here.'
@@ -1150,24 +1179,6 @@ export default function SessionPage() {
                         </span>
                       )}
                     </p>
-                  </div>
-                  {/* Confidence indicator */}
-                  <div className="flex shrink-0 flex-col items-end gap-0.5">
-                    <span className="text-[10px] text-foreground-muted/50">Match</span>
-                    <div className="h-1.5 w-16 overflow-hidden rounded-full bg-glass-bg">
-                      <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{
-                          width: `${matchConfidence * 100}%`,
-                          backgroundColor:
-                            matchConfidence > 0.7
-                              ? '#22c55e'
-                              : matchConfidence > 0.4
-                                ? '#eab308'
-                                : '#ef4444',
-                        }}
-                      />
-                    </div>
                   </div>
                 </div>
               </div>

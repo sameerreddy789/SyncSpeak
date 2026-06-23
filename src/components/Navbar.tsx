@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import { APP_NAME } from '@/lib/constants';
 import { Menu, X, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useAuth } from '@/lib/AuthContext';
 
 // -----------------------------------------------------------------------------
 // Navigation items
@@ -27,6 +28,7 @@ const navLinks = [
 
 export function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { user, loading, isConfigured, signInWithGoogle, signOut } = useAuth();
 
   return (
     <nav
@@ -83,22 +85,49 @@ export function Navbar() {
             </a>
           ))}
 
-          <Link
-            href="/dashboard"
-            className={cn(
-              'inline-flex items-center gap-2 rounded-xl px-5 py-2.5',
-              'text-sm font-semibold text-white',
-              'transition-all duration-300',
-              'hover:brightness-110 hover:shadow-lg hover:shadow-accent-cyan/25',
-              'active:scale-[0.97]',
-            )}
-            style={{
-              background:
-                'linear-gradient(135deg, var(--accent-cyan), var(--accent-purple))',
-            }}
-          >
-            Get Started
-          </Link>
+          {!loading && isConfigured && !user && (
+            <button
+              onClick={signInWithGoogle}
+              className={cn(
+                'inline-flex items-center gap-2 rounded-xl px-5 py-2.5',
+                'text-sm font-semibold text-white',
+                'bg-glass-bg border border-glass-border',
+                'transition-all duration-300',
+                'hover:bg-glass-bg-hover hover:border-glass-border-hover',
+                'active:scale-[0.97]',
+              )}
+            >
+              Sign In
+            </button>
+          )}
+
+          {(!isConfigured || user) && (
+            <Link
+              href="/dashboard"
+              className={cn(
+                'inline-flex items-center gap-2 rounded-xl px-5 py-2.5',
+                'text-sm font-semibold text-white',
+                'transition-all duration-300',
+                'hover:brightness-110 hover:shadow-lg hover:shadow-accent-cyan/25',
+                'active:scale-[0.97]',
+              )}
+              style={{
+                background:
+                  'linear-gradient(135deg, var(--accent-cyan), var(--accent-purple))',
+              }}
+            >
+              {user ? 'Dashboard' : 'Get Started'}
+            </Link>
+          )}
+
+          {user && (
+            <button
+              onClick={signOut}
+              className="text-sm font-medium text-foreground-muted transition-colors duration-300 hover:text-red-400"
+            >
+              Sign Out
+            </button>
+          )}
         </div>
 
         {/* ── Mobile hamburger ── */}

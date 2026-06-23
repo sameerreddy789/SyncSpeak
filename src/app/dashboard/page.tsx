@@ -34,6 +34,8 @@ import { ScriptUploader } from '@/components/ScriptUploader';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { formatDuration } from '@/lib/utils';
 import type { ScriptAnalysis, TopicNode, CoachingNote } from '@/types';
+import { useAuth } from '@/lib/AuthContext';
+import { loadScripts, saveScript, deleteScript } from '@/lib/firestore';
 
 // -----------------------------------------------------------------------------
 // Constants
@@ -149,26 +151,41 @@ export default function DashboardPage() {
   const router = useRouter();
 
   // ── State ──────────────────────────────────────────────────────────────
+  const { user, isConfigured } = useAuth();
   const [currentAnalysis, setCurrentAnalysis] = useState<ScriptAnalysis | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [savedScripts, setSavedScripts] = useState<SavedScriptEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [hasMounted, setHasMounted] = useState(false);
 
-  // ── Load saved scripts from localStorage (hydration-safe) ──────────────
+  // ── Load saved scripts ──────────────
   useEffect(() => {
     setHasMounted(true);
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed: SavedScriptEntry[] = JSON.parse(raw);
-        setSavedScripts(parsed);
+    
+    async function loadData() {
+      if (user && isConfigured) {
+        try {
+          const scripts = await loadScripts(user.uid);
+          const mapped = scripts.map(s => ({ ...s, savedAt: (s.createdAt as Date).toISOString() }));
+          setSavedScripts(mapped);
+        } catch (err) {
+          console.error("Failed to load from Firestore", err);
+        }
+      } else {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          if (raw) {
+            const parsed: SavedScriptEntry[] = JSON.parse(raw);
+            setSavedScripts(parsed);
+          }
+        } catch {
+          console.warn('Failed to load saved scripts from localStorage.');
+        }
       }
-    } catch {
-      // Silently handle corrupted localStorage
-      console.warn('Failed to load saved scripts from localStorage.');
     }
-  }, []);
+    
+    loadData();
+  }, [user, isConfigured]);
 
   // ── Handle script analysis ─────────────────────────────────────────────
   const handleAnalyze = useCallback(async (text: string, title: string) => {
@@ -193,24 +210,35 @@ export default function DashboardPage() {
       const analysis: ScriptAnalysis = await res.json();
       setCurrentAnalysis(analysis);
 
-      // Persist to localStorage
-      const saved: SavedScriptEntry[] = JSON.parse(
-        localStorage.getItem(STORAGE_KEY) || '[]'
-      );
+      // Persist
       const entry: SavedScriptEntry = {
         ...analysis,
         savedAt: new Date().toISOString(),
       };
-      saved.unshift(entry);
-      const trimmed = saved.slice(0, MAX_SAVED_SCRIPTS);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
-      setSavedScripts(trimmed);
+      
+      if (user && isConfigured) {
+        try {
+          await saveScript(user.uid, analysis);
+          setSavedScripts(prev => [entry, ...prev]);
+        } catch (err) {
+          console.error("Failed to save to Firestore", err);
+          setError("Failed to save script to cloud.");
+        }
+      } else {
+        const saved: SavedScriptEntry[] = JSON.parse(
+          localStorage.getItem(STORAGE_KEY) || '[]'
+        );
+        saved.unshift(entry);
+        const trimmed = saved.slice(0, MAX_SAVED_SCRIPTS);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+        setSavedScripts(trimmed);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong');
     } finally {
       setIsAnalyzing(false);
     }
-  }, []);
+  }, [user, isConfigured]);
 
   // ── Start a session ────────────────────────────────────────────────────
   const handleStartSession = useCallback(
@@ -233,17 +261,28 @@ export default function DashboardPage() {
 
   // ── Delete a saved script ──────────────────────────────────────────────
   const handleDeleteScript = useCallback(
-    (scriptId: string) => {
-      const updated = savedScripts.filter((s) => s.id !== scriptId);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      setSavedScripts(updated);
+    async (scriptId: string) => {
+      if (user && isConfigured) {
+        try {
+          await deleteScript(user.uid, scriptId);
+          setSavedScripts((prev) => prev.filter((s) => s.id !== scriptId));
+        } catch (err) {
+          console.error("Failed to delete from Firestore", err);
+          setError("Failed to delete script from cloud.");
+          return;
+        }
+      } else {
+        const updated = savedScripts.filter((s) => s.id !== scriptId);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+        setSavedScripts(updated);
+      }
 
       // If the deleted script is the one currently shown, clear it
       if (currentAnalysis?.id === scriptId) {
         setCurrentAnalysis(null);
       }
     },
-    [savedScripts, currentAnalysis]
+    [savedScripts, currentAnalysis, user, isConfigured]
   );
 
   // ── Format saved-at date ───────────────────────────────────────────────

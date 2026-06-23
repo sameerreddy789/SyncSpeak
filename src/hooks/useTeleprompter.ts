@@ -83,6 +83,8 @@ const RECOVERY_THRESHOLD = 0.15;
 
 export function useTeleprompter({
   analysis,
+  // settings is currently unused but part of the API
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   settings,
 }: UseTeleprompterOptions): UseTeleprompterReturn {
   const { chunks } = analysis;
@@ -103,6 +105,63 @@ export function useTeleprompter({
 
   // Flag to prevent recovery fetch when session isn't active
   const isActiveRef = useRef(false);
+
+  // ---- Recovery API (debounced) -------------------------------------------
+
+  // Create a stable debounced function via ref so it survives re-renders
+  // without being torn down.
+  const fetchRecoveryRef = useRef(
+    debounce(async (spokenText: string, chunkIndex: number, currentChunks: typeof chunks) => {
+      if (!isActiveRef.current) return;
+
+      try {
+        const currentChunk = currentChunks[chunkIndex];
+        if (!currentChunk) return;
+
+        // Build surrounding context (previous + next chunks)
+        const prevChunk = chunkIndex > 0 ? currentChunks[chunkIndex - 1] : null;
+        const nextChunk =
+          chunkIndex < currentChunks.length - 1 ? currentChunks[chunkIndex + 1] : null;
+
+        const surroundingContext = [
+          prevChunk ? `[Previous] ${prevChunk.text}` : '',
+          `[Current] ${currentChunk.text}`,
+          nextChunk ? `[Next] ${nextChunk.text}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n\n');
+
+        const response = await fetch('/api/recovery', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            currentChunkText: currentChunk.text,
+            surroundingContext,
+            spokenText,
+          }),
+        });
+
+        if (!response.ok) {
+          console.warn('[SyncSpeak] Recovery API returned', response.status);
+          return;
+        }
+
+        const data: RecoveryInfo = await response.json();
+        setRecoveryInfo(data);
+      } catch (err) {
+        console.warn('[SyncSpeak] Recovery fetch failed:', err);
+      }
+    }, RECOVERY_DEBOUNCE_MS)
+  );
+
+  const debouncedFetchRecovery = fetchRecoveryRef.current;
+
+  // Clean up the debounced function on unmount
+  useEffect(() => {
+    return () => {
+      fetchRecoveryRef.current.cancel();
+    };
+  }, []);
 
   // ---- Speech recognition --------------------------------------------------
 
@@ -150,96 +209,14 @@ export function useTeleprompter({
       setIsRecoveryMode(needsRecovery);
 
       if (needsRecovery) {
-        debouncedFetchRecovery(spokenText, matchResult.chunkIndex);
+        debouncedFetchRecovery(spokenText, matchResult.chunkIndex, chunks);
       } else {
         // Clear recovery info when the speaker finds their way back
         setRecoveryInfo(null);
       }
     },
-    [chunks], // eslint-disable-line react-hooks/exhaustive-deps
-    // debouncedFetchRecovery is a ref-stable debounced fn, safe to omit
+    [chunks, debouncedFetchRecovery], 
   );
-
-  const handleSpeechError = useCallback((errorMessage: string) => {
-    // Surface the error through session state — the UI can decide how to
-    // display it (toast, banner, etc.)
-    console.warn('[SyncSpeak] Speech recognition error:', errorMessage);
-  }, []);
-
-  const {
-    isListening,
-    transcript,
-    interimTranscript,
-    startListening,
-    stopListening,
-    resetTranscript,
-    isSupported: isSpeechSupported,
-    error,
-  } = useSpeechRecognition({
-    continuous: true,
-    interimResults: true,
-    lang: 'en-US',
-    onResult: handleSpeechResult,
-    onError: handleSpeechError,
-  });
-
-  // ---- Recovery API (debounced) -------------------------------------------
-
-  // Create a stable debounced function via ref so it survives re-renders
-  // without being torn down. The debounce util from @/lib/utils returns a
-  // cancellable function.
-  const debouncedFetchRecovery = useMemo(
-    () =>
-      debounce(async (spokenText: string, chunkIndex: number) => {
-        if (!isActiveRef.current) return;
-
-        try {
-          const currentChunk = chunks[chunkIndex];
-          if (!currentChunk) return;
-
-          // Build surrounding context (previous + next chunks)
-          const prevChunk = chunkIndex > 0 ? chunks[chunkIndex - 1] : null;
-          const nextChunk =
-            chunkIndex < chunks.length - 1 ? chunks[chunkIndex + 1] : null;
-
-          const surroundingContext = [
-            prevChunk ? `[Previous] ${prevChunk.text}` : '',
-            `[Current] ${currentChunk.text}`,
-            nextChunk ? `[Next] ${nextChunk.text}` : '',
-          ]
-            .filter(Boolean)
-            .join('\n\n');
-
-          const response = await fetch('/api/recovery', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              currentChunk: currentChunk.text,
-              surroundingContext,
-              spokenText,
-            }),
-          });
-
-          if (!response.ok) {
-            console.warn('[SyncSpeak] Recovery API returned', response.status);
-            return;
-          }
-
-          const data: RecoveryInfo = await response.json();
-          setRecoveryInfo(data);
-        } catch (err) {
-          console.warn('[SyncSpeak] Recovery fetch failed:', err);
-        }
-      }, RECOVERY_DEBOUNCE_MS),
-    [chunks],
-  );
-
-  // Clean up the debounced function on unmount
-  useEffect(() => {
-    return () => {
-      debouncedFetchRecovery.cancel();
-    };
-  }, [debouncedFetchRecovery]);
 
   // ---- Session lifecycle ---------------------------------------------------
 

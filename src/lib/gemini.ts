@@ -17,11 +17,16 @@ import { generateId as utilsGenerateId } from './utils';
 // Client initialisation
 // ---------------------------------------------------------------------------
 
-const apiKey = process.env.GEMINI_API_KEY;
-let ai: GoogleGenAI | null = null;
+let aiInstance: GoogleGenAI | null = null;
 
-if (apiKey) {
-  ai = new GoogleGenAI({ apiKey });
+function getAI(): GoogleGenAI | null {
+  if (!aiInstance) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (apiKey) {
+      aiInstance = new GoogleGenAI({ apiKey });
+    }
+  }
+  return aiInstance;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +105,7 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
 // ---------------------------------------------------------------------------
 
 export async function analyzeScript(scriptText: string, title: string): Promise<ScriptAnalysis> {
+  const ai = getAI();
   if (!ai) {
     throw new Error('GEMINI_API_KEY environment variable is not set.');
   }
@@ -168,6 +174,7 @@ export async function getRecoverySuggestion(
   surroundingContext: string,
   spokenText: string,
 ): Promise<RecoveryInfo> {
+  const ai = getAI();
   if (!ai) {
     throw new Error('GEMINI_API_KEY environment variable is not set.');
   }

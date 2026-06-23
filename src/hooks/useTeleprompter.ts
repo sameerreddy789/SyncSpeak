@@ -218,6 +218,29 @@ export function useTeleprompter({
     [chunks, debouncedFetchRecovery], 
   );
 
+  const handleSpeechError = useCallback((errorMessage: string) => {
+    // Surface the error through session state — the UI can decide how to
+    // display it (toast, banner, etc.)
+    console.warn('[SyncSpeak] Speech recognition error:', errorMessage);
+  }, []);
+
+  const {
+    isListening,
+    transcript,
+    interimTranscript,
+    startListening,
+    stopListening,
+    resetTranscript,
+    isSupported: isSpeechSupported,
+    error,
+  } = useSpeechRecognition({
+    continuous: true,
+    interimResults: true,
+    lang: 'en-US',
+    onResult: handleSpeechResult,
+    onError: handleSpeechError,
+  });
+
   // ---- Session lifecycle ---------------------------------------------------
 
   const startSession = useCallback(() => {

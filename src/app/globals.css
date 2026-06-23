@@ -1,0 +1,122 @@
+@import "tailwindcss";
+
+/* =============================================================================
+   SyncSpeak — Design System: Futuristic Glassmorphism
+   ============================================================================= */
+
+:root {
+  /* ── Base palette ─────────────────────────────────────────────────────── */
+  --background: #050a14;
+  --foreground: #e4e8f1;
+  --foreground-muted: #8892a8;
+
+  /* ── Accent colors ────────────────────────────────────────────────────── */
+  --accent-cyan: #00d2ff;
+  --accent-purple: #7b61ff;
+  --accent-cyan-muted: rgba(0, 210, 255, 0.15);
+  --accent-purple-muted: rgba(123, 97, 255, 0.15);
+
+  /* ── Glass surfaces ───────────────────────────────────────────────────── */
+  --glass-bg: rgba(255, 255, 255, 0.04);
+  --glass-bg-hover: rgba(255, 255, 255, 0.08);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-border-hover: rgba(255, 255, 255, 0.15);
+  --glass-blur: 12px;
+
+  /* ── Surface layers (progressively lighter) ───────────────────────────── */
+  --surface-0: #050a14;
+  --surface-1: #0c1322;
+  --surface-2: #121a2e;
+  --surface-3: #1a2340;
+
+  /* ── Glow tokens ──────────────────────────────────────────────────────── */
+  --glow-cyan: 0 0 20px rgba(0, 210, 255, 0.35);
+  --glow-purple: 0 0 20px rgba(123, 97, 255, 0.35);
+  --glow-combo: 0 0 20px rgba(0, 210, 255, 0.2), 0 0 40px rgba(123, 97, 255, 0.15);
+
+  /* ── Transitions ──────────────────────────────────────────────────────── */
+  --transition-fast: 0.15s ease;
+  --transition-base: 0.3s ease;
+  --transition-slow: 0.5s ease;
+}
+
+/* ── Register design tokens as Tailwind v4 theme values ─────────────────── */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-foreground-muted: var(--foreground-muted);
+  --color-accent-cyan: var(--accent-cyan);
+  --color-accent-purple: var(--accent-purple);
+  --color-accent-cyan-muted: var(--accent-cyan-muted);
+  --color-accent-purple-muted: var(--accent-purple-muted);
+  --color-glass-bg: var(--glass-bg);
+  --color-glass-bg-hover: var(--glass-bg-hover);
+  --color-glass-border: var(--glass-border);
+  --color-glass-border-hover: var(--glass-border-hover);
+  --color-surface-0: var(--surface-0);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* ── Base styles ────────────────────────────────────────────────────────── */
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+}
+
+/* ── Selection styling ──────────────────────────────────────────────────── */
+::selection {
+  background: var(--accent-cyan-muted);
+  color: var(--accent-cyan);
+}
+
+/* ── Scrollbar styling ──────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--surface-0);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--glass-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--glass-border-hover);
+}
+
+/* ── Keyframe animations ────────────────────────────────────────────────── */
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 1; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Reduced-motion safeguard ───────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

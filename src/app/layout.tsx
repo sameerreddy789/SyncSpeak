@@ -10,6 +10,7 @@ export const metadata: Metadata = {
 };
 
 import { AuthProvider } from '@/lib/AuthContext';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 export default function RootLayout({
   children,
@@ -20,7 +21,9 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <body className={`${inter.className} min-h-screen flex flex-col antialiased bg-[var(--bg-primary)]`}>
         <AuthProvider>
-          {children}
+          {/* Global safety net: a render error anywhere in the tree shows a
+              styled fallback instead of a blank white screen. */}
+          <ErrorBoundary>{children}</ErrorBoundary>
         </AuthProvider>
       </body>
     </html>

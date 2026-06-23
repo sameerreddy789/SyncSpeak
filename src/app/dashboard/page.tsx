@@ -169,7 +169,12 @@ export default function DashboardPage() {
           const mapped = scripts.map(s => ({ ...s, savedAt: (s.createdAt as Date).toISOString() }));
           setSavedScripts(mapped);
         } catch (err) {
+          // Don't swallow this silently — the existing error banner will show
+          // it, so the user knows why their cloud list is empty. The local
+          // fallback still runs below so they keep whatever's cached.
           console.error("Failed to load from Firestore", err);
+          const reason = err instanceof Error ? err.message : 'Could not load your saved scripts from the cloud.';
+          setError(`${reason} Showing locally saved scripts instead.`);
         }
       } else {
         try {

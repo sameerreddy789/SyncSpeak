@@ -24,10 +24,10 @@ export const DEFAULT_TELEPROMPTER_SETTINGS: TeleprompterSettings = {
 };
 
 // -----------------------------------------------------------------------------
-// Gemini Prompt Templates
+// AI Prompt Templates
 // -----------------------------------------------------------------------------
 
-export const GEMINI_PROMPTS = {
+export const AI_PROMPTS = {
   /**
    * System-level instruction that sets the AI's persona for every request.
    */

@@ -18,7 +18,7 @@ export interface ScriptChunk {
   estimatedDuration: number; // seconds
 }
 
-/** Full analysis result from Gemini, including chunks, topics, and coaching */
+/** Full analysis result from AI analysis, including chunks, topics, and coaching */
 export interface ScriptAnalysis {
   id: string;
   title: string;

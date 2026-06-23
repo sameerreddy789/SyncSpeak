@@ -1,5 +1,5 @@
 import { ScriptAnalysis, RecoveryInfo } from '@/types';
-import { GEMINI_PROMPTS, MAX_SCRIPT_LENGTH } from './constants';
+import { AI_PROMPTS, MAX_SCRIPT_LENGTH } from './constants';
 import { generateId as utilsGenerateId } from './utils';
 
 // =============================================================================
@@ -8,6 +8,38 @@ import { generateId as utilsGenerateId } from './utils';
 
 function getApiKey(): string | undefined {
   return process.env.OPENROUTER_API_KEY;
+}
+
+// ---------------------------------------------------------------------------
+// Request deduplication — prevents double-clicks / rapid retries from firing
+// multiple identical AI calls simultaneously. Each unique (system + prompt)
+// pair gets at most one in-flight request at a time.
+// ---------------------------------------------------------------------------
+
+const inflightRequests = new Map<string, Promise<string>>();
+
+function simpleHash(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return hash.toString(36);
+}
+
+function deduplicatedCompletion(systemInstruction: string, prompt: string, isJson: boolean): Promise<string> {
+  const key = `${simpleHash(systemInstruction)}:${simpleHash(prompt)}:${isJson}`;
+
+  const existing = inflightRequests.get(key);
+  if (existing) return existing;
+
+  const promise = openRouterCompletion(systemInstruction, prompt, isJson).finally(() => {
+    inflightRequests.delete(key);
+  });
+
+  inflightRequests.set(key, promise);
+  return promise;
 }
 
 // ---------------------------------------------------------------------------
@@ -130,11 +162,11 @@ export async function analyzeScript(scriptText: string, title: string): Promise<
   }
 
   try {
-    const prompt = GEMINI_PROMPTS.analysisPrompt.replace('{{SCRIPT_TEXT}}', scriptText);
+    const prompt = AI_PROMPTS.analysisPrompt.replace('{{SCRIPT_TEXT}}', scriptText);
 
     const text = await withRetry(() =>
       withTimeout(
-        openRouterCompletion(GEMINI_PROMPTS.systemPrompt, prompt, true),
+        deduplicatedCompletion(AI_PROMPTS.systemPrompt, prompt, true),
         15_000,
         'Script analysis',
       ),
@@ -182,14 +214,14 @@ export async function getRecoverySuggestion(
   }
 
   try {
-    const prompt = GEMINI_PROMPTS.recoveryPrompt
+    const prompt = AI_PROMPTS.recoveryPrompt
       .replace('{{CURRENT_CHUNK}}', currentChunkText)
       .replace('{{SURROUNDING_CONTEXT}}', surroundingContext)
       .replace('{{SPOKEN_TEXT}}', spokenText);
 
     const text = await withRetry(() =>
       withTimeout(
-        openRouterCompletion(GEMINI_PROMPTS.systemPrompt, prompt, true),
+        deduplicatedCompletion(AI_PROMPTS.systemPrompt, prompt, true),
         8_000,
         'Recovery suggestion',
       ),
